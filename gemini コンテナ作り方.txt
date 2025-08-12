@@ -1,0 +1,94 @@
+1. ディレクトリの作成
+
+まず、プロジェクトのルートに app と docker ディレクトリを作成し、さらにその中に必要なサブディレクトリを作成してください。
+
+# ルートディレクトリで実行
+mkdir -p app/backend
+mkdir -p app/frontend
+mkdir -p docker/frontend
+mkdir -p docker/nginx
+mkdir -p docker/php
+
+2. 設定ファイルの作成
+
+次に、提示されている各コードを、対応するパスにファイルとして保存してください。
+
+    docker-compose.yml
+
+    docker/nginx/default.conf
+
+    docker/php/Dockerfile
+
+    docker/php/php.ini
+
+    docker/frontend/Dockerfile
+
+3. Next.jsプロジェクトの作成
+
+ホスト環境にNode.jsをインストールせず、Dockerを使ってNext.jsプロジェクトを作成します。
+以下のコマンドをプロジェクトのルートディレクトリで実行してください。一時的なNode.jsコンテナが起動し、app/frontend ディレクトリ内にプロジェクトファイルが生成されます。
+
+# ルートディレクトリで実行
+docker run -it --rm -v ./app/frontend:/app -w /app node:20-alpine npx create-next-app@latest . --ts --eslint --tailwind --src-dir --app --import-alias "@/*"
+# react bootstrapの導入
+docker run --rm -v ./app/frontend:/app -w /app node:20-alpine npm install react-bootstrap bootstrap
+
+#ドラッグアンドドロップ用のライブラリ
+docker run --rm -v ./app/frontend:/app -w /app node:20-alpine npm install @hello-pangea/dnd
+
+//js-cookieの導入
+
+docker run --rm -v ./app/frontend:/app -w /app node:20-alpine npm i --save-dev @types/js-cookie
+
+//next.jsのメモリを増やす
+NODE_OPTIONS="--max-old-space-size=4096"
+
+
+このコマンドは、node:18-alpineイメージを使い、app/frontendをコンテナ内の/appにマウントしてcreate-next-appを実行します。完了後、コンテナは自動的に削除されます。
+4. PHPファイルの作成（任意）
+
+動作確認のために、簡単なPHPファイルを app/backend に作成します。
+
+app/backend/api.php:
+
+<?php
+header("Content-Type: application/json; charset=utf-8");
+header("Access-Control-Allow-Origin: *"); // 開発用にCORSを許可
+
+$response = [
+    'message' => 'Hello from PHP API!',
+    'timestamp' => date('Y-m-d H:i:s')
+];
+
+echo json_encode($response);
+
+5. Dockerコンテナの起動
+
+すべてのファイルの準備ができたら、ルートディレクトリで以下のコマンドを実行してコンテナを起動します。
+
+docker-compose up -d --build
+
+初回起動時はイメージのビルドに時間がかかります。
+6. アクセス確認
+
+コンテナが正常に起動したら、ブラウザで以下のURLにアクセスして動作を確認できます。
+
+    Next.jsフロントエンド: http://localhost
+
+    PHP API: http://localhost/backend/api.php
+
+    phpMyAdmin: http://localhost:8080
+
+        サーバー: mysql
+
+        ユーザー: user
+
+        パスワード: password
+
+補足
+
+    Next.jsのホットリロード: app/frontend 内のファイルを変更すると、ブラウザが自動的にリロードされます。
+
+    データベース: MySQLのデータは、Dockerボリューム db-data に永続化されます。
+
+    コンテナの停止: docker-compose down

@@ -1,0 +1,51 @@
+AlmaLinuxにDockerをインストールする一般的な手順を説明します。Dockerをインストールするには、公式リポジトリを追加してからパッケージをインストールするのが最も推奨される方法です。
+
+1. システムのアップデート
+
+まず、システムを最新の状態にアップデートします。
+Bash
+
+sudo dnf update -y
+
+2. Dockerリポジトリの追加
+
+次に、Dockerの公式リポジトリを追加します。AlmaLinuxはCentOSとバイナリ互換性があるため、CentOS用リポジトリを使用します。
+Bash
+
+sudo dnf install -y dnf-utils
+sudo dnf config-manager --add-repo https://download.docker.com/linux/centos/docker-ce.repo
+
+3. Dockerのインストール
+
+リポジトリが追加されたら、Docker Engine、CLI、Containerdなどをまとめてインストールします。
+Bash
+
+sudo dnf install docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+
+途中でGPGキーの承認を求められることがあります。yを入力して続行してください。
+
+4. Dockerサービスの起動と自動起動設定
+
+インストールが完了したら、Dockerサービスを起動し、システム起動時に自動で立ち上がるように設定します。
+Bash
+
+sudo systemctl start docker
+sudo systemctl enable docker
+
+5. 動作確認
+
+Dockerが正常に動作しているか確認するために、hello-worldコンテナを実行してみます。
+Bash
+
+sudo docker run hello-world
+
+「Hello from Docker!」というメッセージが表示されれば、インストールは成功です。
+
+6. (オプション) sudoなしでDockerコマンドを実行する
+
+毎回sudoをつけずにDockerコマンドを使いたい場合は、ユーザーをdockerグループに追加します。
+Bash
+
+sudo usermod -aG docker $USER
+
+この変更を反映させるには、一度ログアウトして再度ログインする必要があります。

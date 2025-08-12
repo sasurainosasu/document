@@ -1,0 +1,149 @@
+version: '3'
+
+services:
+  #--------------------------------
+  # リバースプロキシ
+  #--------------------------------
+  nginx-proxy:
+    image: jwilder/nginx-proxy
+    container_name: nginx-proxy
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - /var/run/docker.sock:/tmp/docker.sock:ro
+      - certs:/etc/nginx/certs:ro
+      - vhost.d:/etc/nginx/vhost.d
+      - html:/usr/share/nginx/html
+    networks:
+      - app-network
+    restart: always
+
+  #--------------------------------
+  # SSL証明書自動取得コンテナ
+  #--------------------------------
+  acme-companion:
+    image: nginxproxy/acme-companion
+    container_name: nginx-proxy-acme
+    volumes:
+      - certs:/etc/nginx/certs
+      - vhost.d:/etc/nginx/vhost.d
+      - html:/usr/share/nginx/html
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    environment:
+      - DEFAULT_EMAIL=your-email@example.com # 👈 あなたのメールアドレスに置き換えてください
+    networks:
+      - app-network
+    depends_on:
+      - nginx-proxy
+    restart: always
+
+  #--------------------------------
+  # PHP-FPM
+  #--------------------------------
+  php:
+    container_name: prod-php
+    build:
+      context: .
+      dockerfile: ./docker/php/Dockerfile
+    volumes:
+      - ./app:/var/www/html
+    environment:
+      MAILHOG_HOST: mailhog
+      MAILHOG_PORT: 1025
+      VIRTUAL_HOST=api.example.com          # 👈 APIのサブドメインに置き換えてください
+      LETSENCRYPT_HOST=api.example.com      # 👈 APIのサブドメインに置き換えてください
+      LETSENCRYPT_EMAIL=your-email@example.com # 👈 あなたのメールアドレスに置き換えてください
+    env_file:
+      - .env
+    networks:
+      - app-network
+    restart: always
+
+  #--------------------------------
+  # Next.js (フロントエンド)
+  #--------------------------------
+  frontend:
+    container_name: prod-frontend
+    build:
+      context: .
+      dockerfile: ./docker/frontend/prod.Dockerfile
+    volumes:
+      - ./app/frontend/.next:/app/.next
+      - ./app/frontend/public:/app/public
+      - /app/node_modules
+    expose:
+      - "3000"
+    environment:
+      - CHOKIDAR_USEPOLLING=true
+      - WATCHPACK_POLLING=true
+      - VIRTUAL_HOST=app.example.com          # 👈 アプリケーションのサブドメインに置き換えてください
+      - LETSENCRYPT_HOST=app.example.com      # 👈 アプリケーションのサブドメインに置き換えてください
+      - LETSENCRYPT_EMAIL=your-email@example.com # 👈 あなたのメールアドレスに置き換えてください
+    networks:
+      - app-network
+    tty: true
+    restart: always
+    
+  #--------------------------------
+  # MySQL (データベース)
+  #--------------------------------
+  mysql:
+    container_name: prod-mysql
+    image: mysql:8.0
+    ports:
+      - "3306:3306"
+    environment:
+      MYSQL_DATABASE: ${DB_NAME}
+      MYSQL_USER: ${DB_USER}
+      MYSQL_PASSWORD: ${DB_PASSWORD}
+      MYSQL_ROOT_PASSWORD: rootpassword
+      TZ: Asia/Tokyo
+    volumes:
+      - db-data:/var/lib/mysql
+      - ./docker/mysql/my.cnf:/etc/mysql/conf.d/my.cnf
+      - ./docker/mysql/sql:/docker-entrypoint-initdb.d
+    networks:
+      - app-network
+
+  #--------------------------------
+  # phpMyAdmin (DB管理ツール)
+  #--------------------------------
+  db-admin:
+    container_name: prod-db-admin
+    image: phpmyadmin/phpmyadmin
+    ports:
+      - "8080:80"
+    environment:
+      PMA_HOST: mysql
+      PMA_PORT: 3306
+    depends_on:
+      - mysql
+    networks:
+      - app-network
+      
+  #--------------------------------
+  # MailHog
+  #--------------------------------
+  mailhog:
+    container_name: dev-mailhog
+    image: mailhog/mailhog
+    logging:
+      driver: "none"
+    ports:
+      - "1025:1025"
+      - "8025:8025"
+    networks:
+      - app-network
+
+# 名前付きボリュームの定義
+volumes:
+  db-data:
+  certs:
+  vhost.d:
+  html:
+
+# サービスが接続するネットワークの定義
+networks:
+  app-network:
+    driver: bridge

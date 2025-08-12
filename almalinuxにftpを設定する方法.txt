@@ -1,0 +1,129 @@
+AlmaLinuxにFTPサーバーを導入するには、vsftpd（Very Secure FTP Daemon）を使うのが一般的です。これは、セキュリティが高く、設定が比較的簡単なためです。
+
+1. vsftpdのインストール
+
+まず、dnfパッケージマネージャーを使ってvsftpdをインストールします。
+Bash
+
+sudo dnf install vsftpd -y
+
+2. vsftpdの設定
+
+次に、vsftpdの設定ファイルを編集します。設定ファイルは/etc/vsftpd/vsftpd.confにあります。
+Bash
+
+sudo vi /etc/vsftpd/vsftpd.conf
+
+匿名アクセスを無効にする
+
+セキュリティのため、匿名ユーザーによるアクセスを無効にすることを推奨します。
+
+anonymous_enable=YES の行を以下のように変更します。
+
+anonymous_enable=NO
+
+ローカルユーザーのアップロードを許可する
+
+FTP経由でファイルのアップロードを許可する場合、以下の行を有効にします。
+
+write_enable=YES
+
+chroot設定
+
+ユーザーが自分のホームディレクトリから外に出られないようにするために、chrootを有効にします。
+
+chroot_local_user=YES
+
+3. ファイアウォールの設定
+
+vsftpdが使用するポートを開放する必要があります。FTPは通常、ポート21を使用し、データ転送用にパッシブポートも必要です。
+Bash
+
+sudo firewall-cmd --permanent --add-service=ftp
+sudo firewall-cmd --reload
+
+4. SELinuxの設定
+
+SELinuxが有効になっている場合、FTPがホームディレクトリへのアクセスを許可するように設定が必要です。
+Bash
+
+sudo setsebool -P ftpd_full_access on
+
+5. vsftpdの起動と自動起動設定
+
+設定が完了したら、vsftpdサービスを起動し、システム起動時に自動で立ち上がるように設定します。
+Bash
+
+sudo systemctl start vsftpd
+sudo systemctl enable vsftpd
+
+これで、ローカルユーザーアカウントを使ってFTPクライアントから接続できるようになります。
+
+
+特定のユーザーのみchroot環境に制限するには、vsftpd.confファイルと、chrootを適用するユーザーをリストするファイルの両方を設定する必要があります。
+
+1. vsftpd.conf の設定
+
+まず、/etc/vsftpd/vsftpd.confファイルを開き、以下の設定を確認または追加します。
+Bash
+
+sudo vi /etc/vsftpd/vsftpd.conf
+
+以下の3つの行が有効になっていることを確認します。
+コード スニペット
+
+# chroot_list_fileオプションを有効にする
+chroot_local_user=YES
+chroot_list_enable=YES
+
+# chrootを適用しないユーザーをリストするファイルを指定
+chroot_list_file=/etc/vsftpd/chroot_list
+
+この設定では、chroot_listファイルにリストされているユーザーはchroot環境から解放され、それ以外のローカルユーザーはchroot環境に制限されます。
+
+2. chroot_list ファイルの作成
+
+次に、chroot_list_fileで指定したファイル（/etc/vsftpd/chroot_list）を作成します。
+Bash
+
+sudo vi /etc/vsftpd/chroot_list
+
+このファイルに、chroot環境に制限したくない（つまり、自分のホームディレクトリ外にアクセスさせたい）ユーザー名を1行に1つずつ記述します。
+
+例：
+user1をchrootから除外したい場合
+
+user1
+
+3. vsftpd の再起動
+
+設定変更を反映させるために、vsftpdサービスを再起動します。
+Bash
+
+sudo systemctl restart vsftpd
+
+これで、chroot_listファイルに記載されていないユーザーは、FTP接続時にホームディレクトリに制限されます。
+
+2. FTPモード（Passive/Active）の確認
+
+FTPはデータ転送に別のポートを使用するため、vsftpdの設定とファイアウォール、VirtualBoxのネットワーク設定が連動している必要があります。
+
+    vsftpdの設定ファイル (/etc/vsftpd/vsftpd.conf) で、パッシブモードを有効にし、ポート範囲を設定しているか確認します。
+    コード スニペット
+
+pasv_enable=YES
+pasv_min_port=50000
+pasv_max_port=50010
+
+ポートフォワーディング（NATの場合）
+
+    上記で設定したポート範囲（例：50000-50010）も、ポートフォワーディングルールに追加する必要があります。
+
+ファイアウォール
+
+    パッシブモードのポート範囲をファイアウォールで開放する必要があります。
+
+Bash
+
+sudo firewall-cmd --permanent --add-port=50000-50010/tcp
+sudo firewall-cmd --reload

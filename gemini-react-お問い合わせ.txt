@@ -1,0 +1,935 @@
+現在の日本時間2025年7月30日17時59分において、Next.jsでお問い合わせフォームを「入力画面」「確認画面」「完了画面」の3つのステップで作成するのは、ユーザーエクスペリエンスの観点から非常に良いアプローチです。
+
+Next.jsでこれを実現するには、主に以下の2つの方法が考えられます。
+
+    ルーティングを利用する方法（各画面を別のページにする）:
+
+        /contact (入力画面)
+
+        /contact/confirm (確認画面)
+
+        /contact/complete (完了画面)
+        この方法は、ブラウザのURLも各ステップに対応し、ユーザーがURLをブックマークしたり、戻るボタンで前の画面に戻ったりしやすいというメリットがあります。ただし、フォームデータを次のページに引き継ぐための工夫が必要です。
+
+    単一のページ内でコンポーネントを切り替える方法（ステート管理で制御）:
+
+        /contact の単一ページ内で、ステート（状態）に応じて表示するコンポーネント（入力、確認、完了）を切り替える。
+        この方法は、ページ遷移がないためデータの受け渡しが容易ですが、ブラウザのURLは変わらず、戻るボタンの挙動をJavaScriptで制御する必要がある場合があります。
+
+今回は、よりNext.jsのルーティング機能を活用し、かつ堅牢なデータ受け渡しを実現しやすい**「ルーティングを利用する方法」**を中心に説明します。ただし、フォームデータはセッションストレージまたはURLSearchParamsを使って引き継ぎます。
+
+3ステップお問い合わせフォームの構成案（ルーティング利用）
+
+ページ構成
+
+pages/
+├── contact/
+│   ├── index.js          // 1. 入力画面
+│   ├── confirm.js        // 2. 確認画面
+│   └── complete.js       // 3. 完了画面
+
+データフローの考え方
+
+    入力画面 (index.js):
+
+        ユーザーがデータを入力。
+
+        入力内容を検証（クライアントサイド）。
+
+        「確認画面へ」ボタンクリックで、入力データを何らかの方法（例: セッションストレージ、URLのクエリパラメータ）で保存し、/contact/confirmへ遷移。
+
+    確認画面 (confirm.js):
+
+        保存されたフォームデータを取得し、表示。
+
+        ユーザーは内容を確認。
+
+        「戻る」ボタンで/contactへ戻る（セッションストレージからデータを復元）。
+
+        「送信」ボタンクリックで、Next.js API Route などへデータを送信。成功後、/contact/completeへ遷移。
+
+    完了画面 (complete.js):
+
+        送信完了メッセージを表示。
+
+        通常、ここから再度のフォーム送信はさせない（フォームデータをクリアする）。
+
+データ引き継ぎの方法
+
+今回は、シンプルさと安定性を考慮し、sessionStorage を使ってフォームデータを引き継ぐ方法を推奨します。sessionStorageはブラウザのタブが閉じられるとデータが消えるため、一時的なフォームデータに適しています。
+
+sessionStorage を使用する場合の注意点
+
+    サーバーサイドでのレンダリング（SSR）時には sessionStorage は利用できません。クライアントサイドでのみ利用可能です。
+
+    機密性の高い情報は sessionStorage に保存すべきではありません（最終的な送信は必ずサーバーサイドAPIで行う）。
+
+    複数タブでの同時利用には向いていません（同じオリジンであればタブ間で共有されますが、お問い合わせフォームのような場合は通常問題ありません）。
+
+実装ステップ
+
+1. プロジェクトの作成
+
+Bash
+
+npx create-next-app@latest nextjs-contact-form --ts # TypeScriptを使う場合
+cd nextjs-contact-form
+
+または
+Bash
+
+npx create-next-app@latest nextjs-contact-form # JavaScriptを使う場合
+cd nextjs-contact-form
+
+2. 共通のフォームデータ型を定義 (TypeScriptの場合)
+
+types/contact.d.ts (または types/index.ts など)
+TypeScript
+
+// types/contact.d.ts
+export type FormData = {
+  name: string;
+  email: string;
+  message: string;
+};
+
+JavaScriptの場合は不要ですが、データ構造を把握するのに役立ちます。
+
+3. 入力画面 (pages/contact/index.tsx)
+
+TypeScript
+
+// pages/contact/index.tsx
+import React, { useState, useEffect } from 'react';
+import { useRouter } from 'next/router';
+import type { FormData } from '../../types/contact'; // TypeScriptの場合
+
+const ContactInputPage: React.FC = () => {
+  const router = useRouter();
+  const [formData, setFormData] = useState<FormData>({
+    name: '',
+    email: '',
+    message: '',
+  });
+  const [errors, setErrors] = useState<Partial<FormData>>({});
+
+  // 戻るボタンで戻ってきたときにデータを復元
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      const savedData = sessionStorage.getItem('contactFormData');
+      if (savedData) {
+        setFormData(JSON.parse(savedData));
+      }
+    }
+  }, []);
+
+  const handleChange = (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => {
+    const { name, value } = e.target;
+    setFormData({ ...formData, [name]: value });
+    // 入力時にエラーをクリア
+    if (errors[name as keyof FormData]) {
+      setErrors({ ...errors, [name]: undefined });
+    }
+  };
+
+  const validate = (): boolean => {
+    const newErrors: Partial<FormData> = {};
+    if (!formData.name.trim()) {
+      newErrors.name = 'お名前は必須です。';
+    }
+    if (!formData.email.trim()) {
+      newErrors.email = 'メールアドレスは必須です。';
+    } else if (!/\S+@\S+\.\S+/.test(formData.email)) {
+      newErrors.email = '有効なメールアドレスを入力してください。';
+    }
+    if (!formData.message.trim()) {
+      newErrors.message = 'お問い合わせ内容は必須です。';
+    }
+    setErrors(newErrors);
+    return Object.keys(newErrors).length === 0;
+  };
+
+  const handleSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (validate()) {
+      if (typeof window !== 'undefined') {
+        sessionStorage.setItem('contactFormData', JSON.stringify(formData));
+      }
+      router.push('/contact/confirm');
+    }
+  };
+
+  return (
+    <div>
+      <h1>お問い合わせ (入力)</h1>
+      <form onSubmit={handleSubmit}>
+        <div>
+          <label htmlFor="name">お名前:</label>
+          <input
+            type="text"
+            id="name"
+            name="name"
+            value={formData.name}
+            onChange={handleChange}
+            required
+          />
+          {errors.name && <p style={{ color: 'red' }}>{errors.name}</p>}
+        </div>
+        <div>
+          <label htmlFor="email">メールアドレス:</label>
+          <input
+            type="email"
+            id="email"
+            name="email"
+            value={formData.email}
+            onChange={handleChange}
+            required
+          />
+          {errors.email && <p style={{ color: 'red' }}>{errors.email}</p>}
+        </div>
+        <div>
+          <label htmlFor="message">お問い合わせ内容:</label>
+          <textarea
+            id="message"
+            name="message"
+            value={formData.message}
+            onChange={handleChange}
+            rows={5}
+            required
+          ></textarea>
+          {errors.message && <p style={{ color: 'red' }}>{errors.message}</p>}
+        </div>
+        <button type="submit">確認画面へ</button>
+      </form>
+    </div>
+  );
+};
+
+export default ContactInputPage;
+
+4. 確認画面 (pages/contact/confirm.tsx)
+
+TypeScript
+
+// pages/contact/confirm.tsx
+import React, { useState, useEffect } from 'react';
+import { useRouter } from 'next/router';
+import type { FormData } from '../../types/contact'; // TypeScriptの場合
+
+const ContactConfirmPage: React.FC = () => {
+  const router = useRouter();
+  const [formData, setFormData] = useState<FormData | null>(null);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      const savedData = sessionStorage.getItem('contactFormData');
+      if (savedData) {
+        setFormData(JSON.parse(savedData));
+      } else {
+        // データがない場合は入力画面に戻す
+        router.push('/contact');
+      }
+    }
+  }, [router]);
+
+  const handleBack = () => {
+    router.push('/contact');
+  };
+
+  const handleSubmit = async () => {
+    if (!formData) return;
+
+    setIsSubmitting(true);
+    setError(null);
+
+    try {
+      // Next.js API Route を呼び出す例
+      const response = await fetch('/api/contact', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(formData),
+      });
+
+      if (response.ok) {
+        // 送信成功後、sessionStorageをクリア
+        if (typeof window !== 'undefined') {
+          sessionStorage.removeItem('contactFormData');
+        }
+        router.push('/contact/complete');
+      } else {
+        const errorData = await response.json();
+        setError(`送信に失敗しました: ${errorData.message || '不明なエラー'}`);
+      }
+    } catch (err) {
+      console.error('フォーム送信エラー:', err);
+      setError('ネットワークエラーが発生しました。');
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  if (!formData) {
+    return <div>読み込み中...</div>; // またはエラーメッセージ
+  }
+
+  return (
+    <div>
+      <h1>お問い合わせ (確認)</h1>
+      <div>
+        <p><strong>お名前:</strong> {formData.name}</p>
+        <p><strong>メールアドレス:</strong> {formData.email}</p>
+        <p><strong>お問い合わせ内容:</strong></p>
+        <p style={{ whiteSpace: 'pre-wrap' }}>{formData.message}</p>
+      </div>
+      {error && <p style={{ color: 'red' }}>{error}</p>}
+      <button onClick={handleBack} disabled={isSubmitting}>戻る</button>
+      <button onClick={handleSubmit} disabled={isSubmitting}>
+        {isSubmitting ? '送信中...' : '送信'}
+      </button>
+    </div>
+  );
+};
+
+export default ContactConfirmPage;
+
+5. 完了画面 (pages/contact/complete.tsx)
+
+TypeScript
+
+// pages/contact/complete.tsx
+import React, { useEffect } from 'react';
+import { useRouter } from 'next/router';
+import Link from 'next/link';
+
+const ContactCompletePage: React.FC = () => {
+  const router = useRouter();
+
+  // 直接アクセスされた場合や、確認画面を経由せずに来た場合にリダイレクトするなどの処理も検討
+  // この例ではシンプルに表示するのみ
+  useEffect(() => {
+    // 例: 送信成功フラグなどを利用して、不正な直接アクセスを防ぐことも可能
+    // ただし、このページは一度表示されたらセッションデータは不要なので、シンプルにしている
+  }, []);
+
+  return (
+    <div>
+      <h1>お問い合わせ (完了)</h1>
+      <p>お問い合わせいただきありがとうございます。</p>
+      <p>内容を確認後、担当者よりご連絡させていただきます。</p>
+      <Link href="/">
+        <a>トップページに戻る</a>
+      </Link>
+    </div>
+  );
+};
+
+export default ContactCompletePage;
+
+6. API Route (pages/api/contact.ts)
+
+これはフォームデータを受け取って処理するサーバーサイドの関数です。
+TypeScript
+
+// pages/api/contact.ts
+import type { NextApiRequest, NextApiResponse } from 'next';
+import type { FormData } from '../../types/contact'; // TypeScriptの場合
+
+type Data = {
+  message: string;
+};
+
+export default async function handler(
+  req: NextApiRequest,
+  res: NextApiResponse<Data>
+) {
+  if (req.method === 'POST') {
+    const { name, email, message }: FormData = req.body;
+
+    // サーバーサイドでのデータ検証
+    if (!name || !email || !message) {
+      return res.status(400).json({ message: 'すべての項目を入力してください。' });
+    }
+    if (!/\S+@\S+\.\S+/.test(email)) {
+      return res.status(400).json({ message: '有効なメールアドレスを入力してください。' });
+    }
+
+    // ここで実際のフォームデータ処理を行います
+    // 例:
+    // 1. データベースに保存 (Prisma, Mongooseなど)
+    //    import { PrismaClient } from '@prisma/client';
+    //    const prisma = new PrismaClient();
+    //    await prisma.contactForm.create({ data: { name, email, message } });
+    //
+    // 2. メール送信サービスを利用 (SendGrid, Nodemailer, Resendなど)
+    //    import nodemailer from 'nodemailer';
+    //    const transporter = nodemailer.createTransport(...);
+    //    await transporter.sendMail({
+    //      from: 'your-email@example.com',
+    //      to: 'recipient@example.com',
+    //      subject: 'お問い合わせがありました',
+    //      text: `名前: ${name}\nメール: ${email}\n内容: ${message}`,
+    //    });
+    //
+    // 3. Slackなどのチャットツールに通知を送る
+    //    fetch('YOUR_SLACK_WEBHOOK_URL', {
+    //      method: 'POST',
+    //      headers: { 'Content-Type': 'application/json' },
+    //      body: JSON.stringify({ text: `新しいお問い合わせ: ${name} (${email})\n${message}` }),
+    //    });
+
+    console.log('お問い合わせを受信しました:', { name, email, message });
+
+    // 処理が成功したことをクライアントに伝える
+    res.status(200).json({ message: 'お問い合わせを受け付けました。' });
+  } else {
+    // POST以外のリクエストは許可しない
+    res.setHeader('Allow', ['POST']);
+    res.status(405).json({ message: `Method ${req.method} Not Allowed` });
+  }
+}
+
+開発サーバーの起動
+
+Bash
+
+npm run dev
+# または
+yarn dev
+
+ブラウザで http://localhost:3000/contact にアクセスして、フォームを試してみてください。
+
+追加の考慮事項
+
+    エラーハンドリングの強化: 各ステップでのエラー表示をよりユーザーフレンドリーにする。
+
+    ローディング状態の表示: データ送信中やページ遷移中にローディングスピナーなどを表示する。
+
+    スパム対策: pages/api/contact.ts に reCAPTCHA やハニーポットなどのスパム対策を組み込む。
+
+    UI/UXの改善: スタイリングを適用し、より使いやすいデザインにする。
+
+    Zod や React Hook Form: より堅牢なフォーム管理やバリデーションが必要な場合は、これらのライブラリの導入を検討してください。特にReact Hook Formはパフォーマンスが良く、制御しやすいです。
+
+    アクセシビリティ: aria-label や適切なHTMLセマンティクスを使用し、アクセシビリティを高める。
+
+この構成は、Next.jsの機能を活用しつつ、ユーザーに分かりやすい3ステップのお問い合わせフォームを実現するための堅牢な基盤となるはずです。
+
+---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+承知いたしました。Next.jsで3ステップのお問い合わせフォームをReact-Bootstrapでデザインし、完了画面ではなく「確認画面」からNext.js API Routeを経由してPHPにJSONデータを渡す想定でコードを作成します。
+
+なぜ「完了画面」ではなく「確認画面」から送信するのかというと、Next.jsのルーティングとAPI Routeの設計思想に合致するためです。ユーザーが確認画面で「送信」ボタンを押したときに、そこで初めてバックエンドへのデータ送信処理が実行されるのが一般的です。完了画面は、その送信が成功したことをユーザーに伝えるための「表示専用」の画面となります。
+
+変更点と新しい構成
+
+    React-Bootstrapの導入: 各コンポーネントにReact-Bootstrapのコンポーネント (Container, Form, Button, Alert, Card, ListGroup など) を適用します。
+
+    PHPへのデータ送信ロジック:
+
+        確認画面 (confirm.tsx): フォームデータをNext.jsのAPI Route (/api/contact) にPOSTリクエストで送信します。
+
+        Next.js API Route (pages/api/contact.ts): ここがハブとなり、確認画面から受け取ったJSONデータを、指定されたPHPエンドポイントにさらにPOSTリクエストで転送します。
+
+        PHPエンドポイント (Next.jsプロジェクト外): 実際にJSONデータを受け取り、データベースに書き込む処理を記述する場所です。今回はこのPHPファイルのダミーコード例も示します。
+
+実装ステップ
+
+1. プロジェクトの作成とReact-Bootstrapのインストール
+
+既存のプロジェクトがある場合は、以下のインストールコマンドのみ実行してください。
+Bash
+
+# 新規プロジェクト作成 (TypeScriptを使用)
+npx create-next-app@latest nextjs-contact-form-rb --ts
+cd nextjs-contact-form-rb
+
+# React-BootstrapとBootstrapのインストール
+npm install react-bootstrap bootstrap
+# または
+yarn add react-bootstrap bootstrap
+
+2. Bootstrap CSSのインポート
+
+pages/_app.tsx (または pages/_app.js) にBootstrapのCSSをインポートします。
+TypeScript
+
+// pages/_app.tsx
+import 'bootstrap/dist/css/bootstrap.min.css'; // この行を追加
+
+function MyApp({ Component, pageProps }: AppProps) {
+  return <Component {...pageProps} />;
+}
+
+export default MyApp;
+
+3. 共通のフォームデータ型を定義 (TypeScriptの場合)
+
+types/contact.d.ts を作成します。
+TypeScript
+
+// types/contact.d.ts
+export type FormData = {
+  name: string;
+  email: string;
+  message: string;
+};
+
+4. 入力画面 (pages/contact/index.tsx)
+
+React-Bootstrapのフォームコンポーネントを使用します。
+TypeScript
+
+// pages/contact/index.tsx
+import React, { useState, useEffect } from 'react';
+import { useRouter } from 'next/router';
+import { Container, Form, Button, Alert } from 'react-bootstrap';
+import type { FormData } from '../../types/contact';
+
+const ContactInputPage: React.FC = () => {
+  const router = useRouter();
+  const [formData, setFormData] = useState<FormData>({
+    name: '',
+    email: '',
+    message: '',
+  });
+  const [errors, setErrors] = useState<Partial<FormData>>({});
+
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      const savedData = sessionStorage.getItem('contactFormData');
+      if (savedData) {
+        setFormData(JSON.parse(savedData));
+      }
+    }
+  }, []);
+
+  const handleChange = (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => {
+    const { name, value } = e.target;
+    setFormData({ ...formData, [name]: value });
+    if (errors[name as keyof FormData]) {
+      setErrors({ ...errors, [name]: undefined });
+    }
+  };
+
+  const validate = (): boolean => {
+    const newErrors: Partial<FormData> = {};
+    if (!formData.name.trim()) {
+      newErrors.name = 'お名前は必須です。';
+    }
+    if (!formData.email.trim()) {
+      newErrors.email = 'メールアドレスは必須です。';
+    } else if (!/\S+@\S+\.\S+/.test(formData.email)) {
+      newErrors.email = '有効なメールアドレスを入力してください。';
+    }
+    if (!formData.message.trim()) {
+      newErrors.message = 'お問い合わせ内容は必須です。';
+    }
+    setErrors(newErrors);
+    return Object.keys(newErrors).every(key => newErrors[key as keyof FormData] === undefined);
+  };
+
+  const handleSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (validate()) {
+      if (typeof window !== 'undefined') {
+        sessionStorage.setItem('contactFormData', JSON.stringify(formData));
+      }
+      router.push('/contact/confirm');
+    }
+  };
+
+  return (
+    <Container className="my-5">
+      <h1>お問い合わせ (入力)</h1>
+      <Form onSubmit={handleSubmit}>
+        <Form.Group className="mb-3" controlId="formName">
+          <Form.Label>お名前:</Form.Label>
+          <Form.Control
+            type="text"
+            name="name"
+            value={formData.name}
+            onChange={handleChange}
+            isInvalid={!!errors.name}
+            required
+          />
+          <Form.Control.Feedback type="invalid">
+            {errors.name}
+          </Form.Control.Feedback>
+        </Form.Group>
+
+        <Form.Group className="mb-3" controlId="formEmail">
+          <Form.Label>メールアドレス:</Form.Label>
+          <Form.Control
+            type="email"
+            name="email"
+            value={formData.email}
+            onChange={handleChange}
+            isInvalid={!!errors.email}
+            required
+          />
+          <Form.Control.Feedback type="invalid">
+            {errors.email}
+          </Form.Control.Feedback>
+        </Form.Group>
+
+        <Form.Group className="mb-3" controlId="formMessage">
+          <Form.Label>お問い合わせ内容:</Form.Label>
+          <Form.Control
+            as="textarea"
+            name="message"
+            value={formData.message}
+            onChange={handleChange}
+            rows={5}
+            isInvalid={!!errors.message}
+            required
+          />
+          <Form.Control.Feedback type="invalid">
+            {errors.message}
+          </Form.Control.Feedback>
+        </Form.Group>
+
+        <Button variant="primary" type="submit">
+          確認画面へ
+        </Button>
+      </Form>
+    </Container>
+  );
+};
+
+export default ContactInputPage;
+
+5. 確認画面 (pages/contact/confirm.tsx)
+
+React-Bootstrapのコンポーネントを使用し、ここでNext.js API Routeにデータを送信します。
+TypeScript
+
+// pages/contact/confirm.tsx
+import React, { useState, useEffect } from 'react';
+import { useRouter } from 'next/router';
+import { Container, Card, Button, Alert, Spinner } from 'react-bootstrap';
+import type { FormData } from '../../types/contact';
+
+const ContactConfirmPage: React.FC = () => {
+  const router = useRouter();
+  const [formData, setFormData] = useState<FormData | null>(null);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      const savedData = sessionStorage.getItem('contactFormData');
+      if (savedData) {
+        setFormData(JSON.parse(savedData));
+      } else {
+        // データがない場合は入力画面に戻す
+        router.replace('/contact'); // replaceを使って履歴に残さない
+      }
+    }
+  }, [router]);
+
+  const handleBack = () => {
+    router.push('/contact');
+  };
+
+  const handleSubmit = async () => {
+    if (!formData) return;
+
+    setIsSubmitting(true);
+    setError(null);
+
+    try {
+      // Next.js API Route を呼び出す
+      const response = await fetch('/api/contact', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(formData),
+      });
+
+      if (response.ok) {
+        // 送信成功後、sessionStorageをクリア
+        if (typeof window !== 'undefined') {
+          sessionStorage.removeItem('contactFormData');
+        }
+        router.replace('/contact/complete'); // replaceを使って履歴に残さない
+      } else {
+        const errorData = await response.json();
+        setError(`送信に失敗しました: ${errorData.message || '不明なエラー'}`);
+      }
+    } catch (err) {
+      console.error('フォーム送信エラー:', err);
+      setError('ネットワークエラーが発生しました。時間を置いて再度お試しください。');
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  if (!formData) {
+    return (
+      <Container className="my-5 text-center">
+        <Spinner animation="border" role="status">
+          <span className="visually-hidden">Loading...</span>
+        </Spinner>
+        <p>データを読み込み中...</p>
+      </Container>
+    );
+  }
+
+  return (
+    <Container className="my-5">
+      <h1>お問い合わせ (確認)</h1>
+      <Card className="mb-3">
+        <Card.Body>
+          <Card.Title>入力内容をご確認ください</Card.Title>
+          <hr />
+          <Card.Text>
+            <strong>お名前:</strong> {formData.name}
+          </Card.Text>
+          <Card.Text>
+            <strong>メールアドレス:</strong> {formData.email}
+          </Card.Text>
+          <Card.Text>
+            <strong>お問い合わせ内容:</strong>
+            <pre className="p-2 border bg-light" style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
+              {formData.message}
+            </pre>
+          </Card.Text>
+        </Card.Body>
+      </Card>
+
+      {error && <Alert variant="danger">{error}</Alert>}
+
+      <div className="d-flex justify-content-between">
+        <Button variant="secondary" onClick={handleBack} disabled={isSubmitting}>
+          戻る
+        </Button>
+        <Button variant="primary" onClick={handleSubmit} disabled={isSubmitting}>
+          {isSubmitting ? (
+            <>
+              <Spinner
+                as="span"
+                animation="border"
+                size="sm"
+                role="status"
+                aria-hidden="true"
+                className="me-2"
+              />
+              送信中...
+            </>
+          ) : (
+            '送信'
+          )}
+        </Button>
+      </div>
+    </Container>
+  );
+};
+
+export default ContactConfirmPage;
+
+6. 完了画面 (pages/contact/complete.tsx)
+
+React-Bootstrapのコンポーネントを使用し、静的な完了メッセージを表示します。
+TypeScript
+
+// pages/contact/complete.tsx
+import React from 'react';
+import Link from 'next/link';
+import { Container, Alert, Button } from 'react-bootstrap';
+
+const ContactCompletePage: React.FC = () => {
+  return (
+    <Container className="my-5 text-center">
+      <Alert variant="success">
+        <Alert.Heading>お問い合わせ完了</Alert.Heading>
+        <p>お問い合わせいただきありがとうございます。</p>
+        <p>内容を確認後、担当者よりご連絡させていただきます。</p>
+        <hr />
+        <div className="d-grid gap-2">
+          <Link href="/">
+            <Button variant="outline-success" as="a">
+              トップページに戻る
+            </Button>
+          </Link>
+        </div>
+      </Alert>
+    </Container>
+  );
+};
+
+export default ContactCompletePage;
+
+7. Next.js API Route (pages/api/contact.ts)
+
+ここがPHPへの橋渡し役です。
+YOUR_PHP_ENDPOINT_URL を実際のPHPファイルが公開されているURLに置き換えてください。
+例: http://localhost/path/to/your_php_script.php
+TypeScript
+
+// pages/api/contact.ts
+import type { NextApiRequest, NextApiResponse } from 'next';
+import type { FormData } from '../../types/contact';
+
+type Data = {
+  message: string;
+};
+
+export default async function handler(
+  req: NextApiRequest,
+  res: NextApiResponse<Data>
+) {
+  if (req.method === 'POST') {
+    const { name, email, message }: FormData = req.body;
+
+    // サーバーサイドでのデータ検証
+    if (!name || !email || !message) {
+      return res.status(400).json({ message: 'すべての項目を入力してください。' });
+    }
+    if (!/\S+@\S+\.\S+/.test(email)) {
+      return res.status(400).json({ message: '有効なメールアドレスを入力してください。' });
+    }
+
+    // ========== ここからPHPへのデータ転送ロジック ==========
+    const PHP_ENDPOINT_URL = process.env.PHP_CONTACT_FORM_ENDPOINT || 'http://localhost/api/contact.php'; // 環境変数またはデフォルトURL
+
+    try {
+      const phpResponse = await fetch(PHP_ENDPOINT_URL, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Accept': 'application/json', // PHPがJSONレスポンスを返すことを期待
+        },
+        body: JSON.stringify({ name, email, message }),
+      });
+
+      if (phpResponse.ok) {
+        // PHPからのレスポンスをそのままクライアントに返すことも可能
+        // const phpData = await phpResponse.json();
+        res.status(200).json({ message: 'お問い合わせを受け付けました。' });
+      } else {
+        const phpErrorText = await phpResponse.text(); // PHPからのエラーレスポンスをテキストとして取得
+        console.error('PHPからのエラーレスポンス:', phpErrorText);
+        res.status(phpResponse.status).json({
+          message: `お問い合わせの処理中にエラーが発生しました。(PHPエラー: ${phpResponse.status})`,
+        });
+      }
+    } catch (phpFetchError) {
+      console.error('PHPエンドポイントへの接続エラー:', phpFetchError);
+      res.status(500).json({ message: 'サーバーの通信エラーが発生しました。' });
+    }
+    // ========== PHPへのデータ転送ロジックここまで ==========
+
+  } else {
+    // POST以外のリクエストは許可しない
+    res.setHeader('Allow', ['POST']);
+    res.status(405).json({ message: `Method ${req.method} Not Allowed` });
+  }
+}
+
+PHPエンドポイントURLの設定:
+本番環境では、YOUR_PHP_ENDPOINT_URL を環境変数として設定することをお勧めします。
+例: .env.local ファイルを作成し、以下のように記述します。
+
+PHP_CONTACT_FORM_ENDPOINT=https://your-domain.com/api/contact.php
+
+これにより、開発環境と本番環境で異なるURLを使い分けることができます。
+
+8. PHP側のダミーコード例 (public_html/api/contact.php など)
+
+これはNext.jsプロジェクトの外部、通常はWebサーバー（Apache, Nginxなど）でPHPが実行される場所に配置されるファイルです。
+PHP
+
+<?php
+// ヘッダー設定: CORS対策とJSONレスポンス
+header("Content-Type: application/json");
+header("Access-Control-Allow-Origin: *"); // 本番環境では特定のドメインに制限してください
+header("Access-Control-Allow-Methods: POST, OPTIONS");
+header("Access-Control-Allow-Headers: Content-Type, Accept");
+
+// OPTIONSリクエストの場合 (CORSプリフライトリクエスト)
+if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
+    http_response_code(200);
+    exit();
+}
+
+// POSTリクエストの場合のみ処理
+if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+    // リクエストボディからJSONデータを取得
+    $json_data = file_get_contents('php://input');
+    $data = json_decode($json_data, true); // trueで連想配列にデコード
+
+    // データが存在し、必要なキーが含まれているか検証
+    if (json_last_error() !== JSON_ERROR_NONE || !isset($data['name'], $data['email'], $data['message'])) {
+        http_response_code(400); // Bad Request
+        echo json_encode(['message' => '無効なデータ形式、または必須項目が不足しています。']);
+        exit();
+    }
+
+    $name = $data['name'];
+    $email = $data['email'];
+    $message = $data['message'];
+
+    // ここでデータベースにデータを書き込む処理を実装します
+    // 例: MySQLへの接続とINSERT
+    $servername = "localhost";
+    $username = "your_db_username";
+    $password = "your_db_password";
+    $dbname = "your_database_name";
+
+    try {
+        $conn = new PDO("mysql:host=$servername;dbname=$dbname;charset=utf8mb4", $username, $password);
+        // PDOエラーモードを例外に設定
+        $conn->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
+
+        // SQLインジェクション対策のためプリペアドステートメントを使用
+        $stmt = $conn->prepare("INSERT INTO contacts (name, email, message, created_at) VALUES (:name, :email, :message, NOW())");
+        $stmt->bindParam(':name', $name);
+        $stmt->bindParam(':email', $email);
+        $stmt->bindParam(':message', $message);
+        $stmt->execute();
+
+        // 成功レスポンス
+        http_response_code(200); // OK
+        echo json_encode(['message' => 'データが正常に保存されました。']);
+
+    } catch (PDOException $e) {
+        // データベースエラー時の処理
+        error_log("Database error: " . $e->getMessage()); // エラーログに記録
+        http_response_code(500); // Internal Server Error
+        echo json_encode(['message' => 'データベースへの書き込みに失敗しました。', 'error' => $e->getMessage()]);
+    } finally {
+        $conn = null; // 接続を閉じる
+    }
+
+} else {
+    // POST以外のリクエストは許可しない
+    http_response_code(405); // Method Not Allowed
+    echo json_encode(['message' => '許可されていないメソッドです。POSTのみが許可されています。']);
+}
+?>
+
+PHP側の注意事項:
+
+    Access-Control-Allow-Origin: * は開発用です。本番環境では、Next.jsアプリケーションがデプロイされているドメイン (https://your-nextjs-app.com) に具体的に制限してください。
+
+    データベース接続情報 ($servername, $username, $password, $dbname) をご自身の環境に合わせて変更してください。
+
+    データベースに contacts というテーブルが既に存在し、id (PRIMARY KEY, AUTO_INCREMENT), name (VARCHAR), email (VARCHAR), message (TEXT), created_at (DATETIME) などのカラムがあることを想定しています。必要に応じてテーブル構造を調整してください。
+
+開発サーバーの起動
+
+Bash
+
+npm run dev
+# または
+yarn dev
+
+ブラウザで http://localhost:3000/contact にアクセスして、フォームを試してみてください。
+PHPのスクリプトは、Webサーバー（Apache, Nginxなど）が動作している環境に配置し、適切なURLでアクセスできるように設定する必要があります。
+
+この実装により、Next.jsのモダンな開発手法とReact-Bootstrapによるデザイン、そして既存のPHPバックエンドとの連携を実現できます。
