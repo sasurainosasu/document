@@ -4,9 +4,9 @@ use PHPMailer\PHPMailer\PHPMailer;
 use PHPMailer\PHPMailer\Exception;
 
 // 設置した場所のパスを指定する
-require('path/to/PHPMailer/src/PHPMailer.php');
-require('path/to/PHPMailer/src/Exception.php');
-require('path/to/PHPMailer/src/SMTP.php');
+require(getenv('PHP_LIB_PASS').'/PHPMailer/src/PHPMailer.php');
+require(getenv('PHP_LIB_PASS').'/PHPMailer/src/Exception.php');
+require(getenv('PHP_LIB_PASS').'/PHPMailer/src/SMTP.php');
 
 // Composerのオートロードファイルを読み込みます
 //require 'vendor/autoload.php';
@@ -29,28 +29,32 @@ class MailService {
 
         // PHPMailerのインスタンスを初期化
         $this->mailer = new PHPMailer(true);
-        $this->smtpSetup($useSmtp);
+
+        // $useSmtpの値に応じて、使用するメーラーを切り替える
+        if ($useSmtp) {
+            $this->mailer->isSMTP();
+            $this->smtpSetup();
+        } else {
+            // SMTPを使わない場合はisMail()を使用する
+            $this->mailer->isMail();
+        }
     }
 
     /**
      * SMTP設定を行うメソッド
      * @param bool $enable trueの場合はSMTP設定を有効にする
      */
-    public function smtpSetup(bool $enable): void {
-        if ($enable) {
-            try {
-                // SMTP設定を有効にする
-                $this->mailer->isSMTP();
-                $this->mailer->Host       = getenv('SMTP_HOST');
-                $this->mailer->SMTPAuth   = true;
-                $this->mailer->Username   = getenv('SMTP_USER');
-                $this->mailer->Password   = getenv('SMTP_PASS');
-                $this->mailer->SMTPSecure = PHPMailer::ENCRYPTION_STARTTLS;
-                $this->mailer->Port       = getenv('SMTP_PORT');
-            } catch (Exception $e) {
-                // 例外処理（設定エラーなど）
-                error_log("PHPMailer SMTP setup failed: " . $e->getMessage());
-            }
+    private function smtpSetup(): void {
+        try {
+            $this->mailer->Host       = getenv('SMTP_HOST');
+            $this->mailer->SMTPAuth   = true;
+            $this->mailer->Username   = getenv('SMTP_USER');
+            $this->mailer->Password   = getenv('SMTP_PASS');
+            $this->mailer->SMTPSecure = PHPMailer::ENCRYPTION_STARTTLS;
+            $this->mailer->Port       = getenv('SMTP_PORT');
+        } catch (Exception $e) {
+            // 例外処理（設定エラーなど）
+            error_log("PHPMailer SMTP setup failed: " . $e->getMessage());
         }
     }
 
@@ -113,7 +117,7 @@ class MailService {
             $this->mailer->CharSet = 'UTF-8';
             $this->mailer->Encoding = 'base64';
             $this->mailer->isHTML(false);
-            $this->mailer->Subject = mb_encode_mimeheader($subject, 'UTF-8', 'B');
+            $this->mailer->Subject = $subject; // ★ ここを修正
             $this->mailer->Body = $body;
 
             $this->mailer->send();
