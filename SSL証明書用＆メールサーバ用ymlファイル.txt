@@ -1,4 +1,4 @@
-version: '3'
+version: '3.8'
 
 services:
   #--------------------------------
@@ -49,15 +49,20 @@ services:
     volumes:
       - ./app:/var/www/html
     environment:
-      MAILHOG_HOST: mailhog
-      MAILHOG_PORT: 1025
-      VIRTUAL_HOST=api.example.com          # 👈 APIのサブドメインに置き換えてください
-      LETSENCRYPT_HOST=api.example.com      # 👈 APIのサブドメインに置き換えてください
-      LETSENCRYPT_EMAIL=your-email@example.com # 👈 あなたのメールアドレスに置き換えてください
+      # MailHogの設定をMailserverに変更
+      - SMTP_HOST=mailserver
+      - SMTP_PORT=587
+      - SMTP_USER=your-email@example.com # 👈 Mailserverに設定したメールアカウント
+      - SMTP_PASS=your-password # 👈 Mailserverに設定したパスワード
+      - VIRTUAL_HOST=api.example.com          # 👈 APIのサブドメインに置き換えてください
+      - LETSENCRYPT_HOST=api.example.com      # 👈 APIのサブドメインに置き換えてください
+      - LETSENCRYPT_EMAIL=your-email@example.com # 👈 あなたのメールアドレスに置き換えてください
     env_file:
       - .env
     networks:
       - app-network
+    depends_on:
+      - mailserver # mailserverへの依存関係を追加
     restart: always
 
   #--------------------------------
@@ -84,7 +89,7 @@ services:
       - app-network
     tty: true
     restart: always
-    
+   
   #--------------------------------
   # MySQL (データベース)
   #--------------------------------
@@ -121,20 +126,32 @@ services:
       - mysql
     networks:
       - app-network
-      
+       
   #--------------------------------
-  # MailHog
+  # Mailserver
   #--------------------------------
-  mailhog:
-    container_name: dev-mailhog
-    image: mailhog/mailhog
-    logging:
-      driver: "none"
+  mailserver:
+    image: docker.io/mailserver/docker-mailserver:latest
+    container_name: mailserver
+    hostname: mail.yourdomain.com # 👈 あなたのドメインに置き換えてください
     ports:
-      - "1025:1025"
-      - "8025:8025"
-    networks:
-      - app-network
+      - "25:25"   # SMTP
+      - "143:143" # IMAP
+      - "587:587" # SMTPS
+      - "993:993" # IMAPS
+    volumes:
+      - ./docker-data/mailserver/mail-data:/var/mail
+      - ./docker-data/mailserver/mail-state:/var/mail-state
+      - ./docker-data/mailserver/mail-logs:/var/log/mail
+      - ./docker-data/mailserver/config/:/tmp/docker-mailserver/
+    environment:
+      - DMS_DEBUG=1
+      - POSTMASTER_ADDRESS=postmaster@yourdomain.com # 👈 あなたのドメインに置き換えてください
+      - SMTPS_ONLY=1
+      - SSL_TYPE=self-signed # 👈 本番環境では letsencrypt を推奨
+    cap_add:
+      - NET_ADMIN
+    restart: always
 
 # 名前付きボリュームの定義
 volumes:
@@ -142,6 +159,10 @@ volumes:
   certs:
   vhost.d:
   html:
+  docker-data/mailserver/mail-data:
+  docker-data/mailserver/mail-state:
+  docker-data/mailserver/mail-logs:
+  docker-data/mailserver/config:
 
 # サービスが接続するネットワークの定義
 networks:
