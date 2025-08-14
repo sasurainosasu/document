@@ -1,0 +1,808 @@
+docker composeの開発環境で、next.jsでSSL化したいです。
+
+Docker Compose を使用して Next.js 開発環境を SSL 化するには、リバースプロキシとして Nginx を追加し、自己署名証明書を作成するのが一般的なアプローチです。これにより、本番環境に近い HTTPS 通信をローカルでシミュレートできます。
+
+1. 構成の概要
+
+この構成では、以下の3つのサービスを使用します。
+
+    Next.js: 開発サーバーとして動作します。通常、HTTP（例: ポート3000）でリッスンします。
+
+    Nginx: リバースプロキシとして機能します。クライアントからの HTTPS リクエスト（ポート443）を受け取り、それを Next.js サービスに転送します。
+
+    Certbot (または手動): SSL証明書を生成するために使用されます。
+
+このセットアップの鍵は、NginxがSSL終端（SSL Termination）を担うことです。つまり、Nginxがクライアントとの間でSSL/TLSハンドシェイクを行い、Next.jsには平文のHTTPリクエストを転送します。これにより、Next.jsアプリケーション自体を変更することなく、SSL化を実現できます。
+
+2. 手順
+
+ステップ1：必要なファイルの準備
+
+まず、プロジェクトのルートディレクトリに、以下のファイルとディレクトリを作成します。
+
+    docker-compose.yml: Docker Compose の設定ファイル
+
+    nginx/: Nginx の設定ファイルや証明書を格納するディレクトリ
+
+        nginx/nginx.conf: Nginx の設定ファイル
+
+        nginx/ssl/: 証明書を格納するディレクトリ
+
+ステップ2：自己署名証明書の生成
+
+Nginxが使用するSSL証明書を作成します。開発環境なので、自己署名証明書で十分です。
+Bash
+
+# 証明書と鍵を格納するディレクトリを作成
+mkdir -p nginx/ssl
+
+# openssl コマンドで自己署名証明書と秘密鍵を生成
+# -x509: 自己署名証明書を作成
+# -nodes: 秘密鍵を暗号化しない
+# -days 365: 証明書の有効期間を365日に設定
+# -newkey rsa:2048: RSA鍵を2048ビットで生成
+# -keyout: 秘密鍵の出力先
+# -out: 証明書の出力先
+# -subj "/CN=localhost": 証明書のコモンネームをlocalhostに設定
+openssl req -x509 -nodes -days 365 -newkey rsa:2048 -keyout nginx/ssl/nextjs.key -out nginx/ssl/nextjs.crt -subj "/CN=localhost"
+
+これにより、nginx/ssl/nextjs.key（秘密鍵）とnginx/ssl/nextjs.crt（証明書）が生成されます。
+
+ステップ3：Nginxの設定
+
+nginx/nginx.confファイルを作成し、以下の内容を記述します。
+Nginx
+
+# nginx/nginx.conf
+
+worker_processes 1;
+
+events {
+    worker_connections 1024;
+}
+
+http {
+    server {
+        # HTTPS通信をポート443でリッスン
+        listen 443 ssl;
+        server_name localhost;
+
+        # SSL証明書と秘密鍵のパスを指定
+        ssl_certificate /etc/nginx/ssl/nextjs.crt;
+        ssl_certificate_key /etc/nginx/ssl/nextjs.key;
+
+        # この設定は開発環境用
+        ssl_protocols TLSv1.2 TLSv1.3;
+        ssl_ciphers HIGH:!aNULL:!MD5;
+
+        location / {
+            # リクエストをNext.jsコンテナに転送
+            # この nextjs は docker-compose.yml で定義するサービス名
+            proxy_pass http://nextjs:3000;
+            proxy_set_header Host $host;
+            proxy_set_header X-Real-IP $remote_addr;
+            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+            proxy_set_header X-Forwarded-Proto $scheme;
+        }
+    }
+}
+
+この設定は、Nginxがlocalhost:443へのHTTPSリクエストを受け取り、それを内部のnextjs:3000サービスに転送するように指示しています。
+
+ステップ4：docker-compose.ymlの作成
+
+次に、docker-compose.ymlファイルを作成し、Next.jsとNginxサービスを定義します。
+YAML
+
+# docker-compose.yml
+
+version: '3.8'
+
+services:
+  nextjs:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    volumes:
+      - .:/app
+      - /app/node_modules
+    ports:
+      # Nginxからアクセスされるため、公開ポートは不要
+      - "3000"
+    environment:
+      - NODE_ENV=development
+    # Nginxサービスが起動してからnextjsサービスを起動させる
+    # (開発環境ではあまり重要ではないが、本番環境では重要)
+    depends_on:
+      - nginx
+    
+  nginx:
+    image: nginx:1.21-alpine
+    # 外部からアクセスできるポートを設定
+    ports:
+      - "443:443"
+    volumes:
+      # Nginxの設定ファイルとSSL証明書をコンテナにマウント
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./nginx/ssl:/etc/nginx/ssl:ro
+    # Next.jsサービスが起動するまでNginxが待機するように設定
+    # (開発環境ではあまり重要ではないが、本番環境では重要)
+    depends_on:
+      - nextjs
+
+このファイルでは、nextjsサービスがDockerfileからビルドされ、nginxサービスが公式のnginx:1.21-alpineイメージを使用しています。nginxサービスのportsで443:443を公開し、クライアントからのHTTPSリクエストを受け付けます。
+
+ステップ5：Next.jsのDockerfileの準備
+
+Next.jsプロジェクトのルートに、Dockerfileを作成します。
+Dockerfile
+
+# Dockerfile
+
+FROM node:18-alpine
+
+WORKDIR /app
+
+COPY package*.json ./
+
+RUN npm install
+
+COPY . .
+
+EXPOSE 3000
+
+CMD ["npm", "run", "dev"]
+
+ステップ6：サービスの起動
+
+すべてのファイルが準備できたら、以下のコマンドでサービスを起動します。
+Bash
+
+docker compose up --build
+
+--buildフラグは、nextjsサービスのイメージを再ビルドするために必要です。
+
+3. アクセス方法
+
+サービスが起動したら、ブラウザで以下のURLにアクセスします。
+
+https://localhost
+
+ブラウザは自己署名証明書のため警告を表示しますが、「詳細設定」などをクリックして先に進むことで、Next.jsアプリケーションがHTTPSで表示されることを確認できます。
+
+💡 ヒント:
+
+    もしmacOSのChromeで「NET::ERR_CERT_INVALID」エラーが出る場合、macOSのキーチェーンに証明書を追加して信頼する必要があります。
+
+        キーチェーンアクセスを開く
+
+        nginx/ssl/nextjs.crtをドラッグ＆ドロップ
+
+        証明書をダブルクリックし、「信頼」セクションで「常に信頼」を選択
+
+これにより、ブラウザの警告を回避できます。
+
+---------------------------------------------------------------------------------------------
+
+nginxのconfについて、以下を事故署名証明書対応に書き換えてください
+
+server {
+
+    listen 80;
+
+    server_name localhost;
+
+    charset utf-8;
+
+
+    # ドキュメントルート
+
+    root /var/www/html;
+
+    index index.php index.html;
+
+
+    # Location for PHP files
+
+    # /backend/api.php のようなリクエストをPHP-FPMに渡す
+
+    location ~ \.php$ {
+
+        #try_files $uri =404;
+
+        fastcgi_split_path_info ^(.+\.php)(/.+)$;
+
+        # サービス名 `php` の 9000番ポートに接続
+
+        fastcgi_pass php:9000;
+
+        fastcgi_index index.php;
+
+        include fastcgi_params;
+
+        # 実行するPHPスクリプトのフルパスをPHP-FPMに伝える
+
+        fastcgi_param SCRIPT_FILENAME $document_root$fastcgi_script_name;
+
+        fastcgi_param PATH_INFO $fastcgi_path_info;
+
+    }
+
+
+    # Location for Next.js app
+
+    # 上記のPHPへのリクエスト以外はすべてNext.jsにプロキシする
+
+    location / {
+
+        # サービス名 `frontend` の 3000番ポートにプロキシ
+
+        proxy_pass http://frontend:3000;
+
+        proxy_http_version 1.1;
+
+        # ホットリロードのためのWebSocket設定
+
+        proxy_set_header Upgrade $http_upgrade;
+
+        proxy_set_header Connection 'upgrade';
+
+        proxy_set_header Host $host;
+
+        proxy_cache_bypass $http_upgrade;
+
+    }
+
+
+    # .htaccessファイルへのアクセスを拒否
+
+    location ~ /\.ht {
+
+        deny all;
+
+    }
+
+}
+
+既存のNginx設定を自己署名証明書に対応させるには、主にHTTPSリスニングポートとSSL設定を追加する必要があります。PHPバックエンドとNext.jsフロントエンドへのルーティングはそのまま維持し、HTTPでアクセスされた際にHTTPSにリダイレクトする設定も追加します。
+
+以下に、ご提示いただいたnginx.confを自己署名証明書対応に書き換えた例を示します。
+Nginx
+
+# HTTP (ポート80) へのアクセスをすべてHTTPSにリダイレクト
+server {
+    listen 80;
+    server_name localhost;
+    return 301 https://$host$request_uri;
+}
+
+# HTTPS (ポート443) の設定
+server {
+    # HTTPS通信をポート443でリッスン
+    listen 443 ssl;
+    server_name localhost;
+    charset utf-8;
+
+    # SSL証明書と秘密鍵のパスを指定
+    # これらのファイルはコンテナ内にマウントされている必要があります
+    ssl_certificate /etc/nginx/ssl/nextjs.crt;
+    ssl_certificate_key /etc/nginx/ssl/nextjs.key;
+
+    # 開発環境用のSSL設定
+    ssl_protocols TLSv1.2 TLSv1.3;
+    ssl_ciphers HIGH:!aNULL:!MD5;
+
+    # ドキュメントルート
+    root /var/www/html;
+    index index.php index.html;
+
+    # Location for PHP files
+    location ~ \.php$ {
+        #try_files $uri =404;
+        fastcgi_split_path_info ^(.+\.php)(/.+)$;
+        fastcgi_pass php:9000;
+        fastcgi_index index.php;
+        include fastcgi_params;
+        fastcgi_param SCRIPT_FILENAME $document_root$fastcgi_script_name;
+        fastcgi_param PATH_INFO $fastcgi_path_info;
+    }
+
+    # Location for Next.js app
+    location / {
+        proxy_pass http://frontend:3000;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection 'upgrade';
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_cache_bypass $http_upgrade;
+    }
+
+    # .htaccessファイルへのアクセスを拒否
+    location ~ /\.ht {
+        deny all;
+    }
+}
+
+変更点の解説
+
+1. HTTPからHTTPSへのリダイレクト
+
+最初のserverブロックで、ポート80へのリクエストを**return 301 https://$host$request_uri;**を使って、強制的にポート443のHTTPSにリダイレクトするようにしました。これにより、ユーザーがhttp://localhostでアクセスしても自動的にセキュアな接続に切り替わります。
+
+2. HTTPSサーバーブロックの追加
+
+2つ目のserverブロックは、HTTPS通信専用です。
+
+    listen 443 ssl;: HTTPSの標準ポートである443番をリッスンし、SSL/TLSを有効にすることを指定します。
+
+    ssl_certificate ... と ssl_certificate_key ...: ここに、自己署名証明書と秘密鍵のコンテナ内のパスを記述します。Docker ComposeでNginxコンテナを起動する際に、これらのファイルをホストマシンからコンテナ内にマウントする必要があります。
+
+    proxy_set_header X-Forwarded-Proto $scheme;: このヘッダーは、元のプロトコル（この場合はhttps）をNext.jsコンテナに伝えるために非常に重要です。Next.js側でプロトコルを判別する必要がある場合に役立ちます。
+
+この設定により、PHPとNext.jsへのルーティングを維持しつつ、HTTPSでのアクセスが可能になります。docker-compose.ymlで証明書と設定ファイルを適切にマウントすることを忘れないでください。
+
+------------------------------------------------------------------------------------------------------------------------
+
+ymlについて、以下のymlを事故正目証明書対応に書き換えてください
+
+services:
+
+  #--------------------------------
+
+  # Nginx (Webサーバー)
+
+  #--------------------------------
+
+  nginx:
+
+    container_name: dev-nginx
+
+    build:
+
+      context: .
+
+      dockerfile: ./docker/nginx/Dockerfile
+
+    ports:
+
+      - "80:80"
+
+    volumes:
+
+      # appディレクトリをマウントしてNginxから参照できるようにする
+
+      - ./app:/var/www/html
+
+      - ./php-lib:/var/www/php-lib
+
+      # Nginxの設定ファイルをマウント
+
+      - ./docker/nginx/default.conf:/etc/nginx/conf.d/default.conf
+
+    depends_on:
+
+      php:
+
+        condition: service_started
+
+      frontend:
+
+        condition: service_started
+
+    networks:
+
+      - app-network
+
+
+  #--------------------------------
+
+  # PHP-FPM
+
+  #--------------------------------
+
+  php:
+
+    container_name: dev-php
+
+    build:
+
+      context: .
+
+      dockerfile: ./docker/php/Dockerfile
+
+    volumes:
+
+      # appディレクトリをマウントしてPHPからファイルを実行できるようにする
+
+      - ./app:/var/www/html
+
+      - ./php-lib:/var/www/php-lib
+
+    environment:
+
+      # MailHogの設定を追加
+
+      MAILHOG_HOST: mailhog
+
+      MAILHOG_PORT: 1025
+
+      TZ: Asia/Tokyo
+
+    env_file:
+
+      - .env
+
+    networks:
+
+      - app-network
+
+
+  #--------------------------------
+
+  # Next.js (フロントエンド)
+
+  #--------------------------------
+
+  frontend:
+
+    container_name: dev-frontend
+
+    build:
+
+      # ビルドのコンテキストをカレントディレクトリに設定
+
+      context: .
+
+      # 使用するDockerfileのパスを指定
+
+      dockerfile: ./docker/frontend/Dockerfile
+
+    volumes:
+
+      # Next.jsのソースコードをマウントしてホットリロードを有効化
+
+      - ./app/frontend:/app
+
+      # node_modulesはホストからマウントせず、コンテナ内のものを維持する
+
+      - /app/node_modules
+
+    ports:
+
+      # Next.jsのdevサーバーが使用する3000番ポートを公開
+
+      - "3000:3000"
+
+    environment:
+
+      # Docker環境でのホットリロードを安定させるための設定
+
+      - CHOKIDAR_USEPOLLING=true
+
+      - WATCHPACK_POLLING=true
+
+    develop:
+
+      watch:
+
+        - action: sync
+
+          path: .
+
+          target: /app
+
+    networks:
+
+      - app-network
+
+    # コンテナを起動し続けるためにttyを有効化
+
+    tty: true
+
+
+  #--------------------------------
+
+  # MySQL (データベース)
+
+  #--------------------------------
+
+  mysql:
+
+    container_name: dev-mysql
+
+    image: mysql:8.0
+
+    ports:
+
+      # ホストの3306番ポートをコンテナの3306番ポートに接続
+
+      - "3306:3306"
+
+    environment:
+
+      MYSQL_DATABASE: ${DB_NAME} #各自変更
+
+      MYSQL_USER: ${DB_USER} #各自変更
+
+      MYSQL_PASSWORD: ${DB_PASSWORD} #各自変更
+
+      MYSQL_ROOT_PASSWORD: rootpassword #各自変更
+
+      TZ: Asia/Tokyo
+
+    volumes:
+
+      # データを永続化するための名前付きボリューム
+
+      - db-data:/var/lib/mysql
+
+      - ./docker/mysql/my.cnf:/etc/mysql/conf.d/my.cnf
+
+      - ./docker/mysql/sql:/docker-entrypoint-initdb.d #新規追加
+
+    networks:
+
+      - app-network
+
+
+  #--------------------------------
+
+  # phpMyAdmin (DB管理ツール)
+
+  #--------------------------------
+
+  db-admin:
+
+    container_name: dev-db-admin
+
+    image: phpmyadmin/phpmyadmin
+
+    ports:
+
+      # ホストの8080番ポートをコンテナの80番ポートに接続
+
+      - "8080:80"
+
+    environment:
+
+      # 接続先のMySQLホスト名を指定
+
+      PMA_HOST: mysql
+
+      PMA_PORT: 3306
+
+    depends_on:
+
+      mysql:
+
+        condition: service_started
+
+    networks:
+
+      - app-network
+
+
+  #--------------------------------
+
+  # MailHog
+
+  #--------------------------------
+
+  mailhog:
+
+    container_name: dev-mailhog
+
+    image: mailhog/mailhog
+
+    logging:
+
+      driver: "none"
+
+    ports:
+
+      # メール受信用のSMTPポート
+
+      - "1025:1025"
+
+      # Web UI用のHTTPポート
+
+      - "8025:8025"
+
+    networks:
+
+      - app-network
+
+
+# 名前付きボリュームの定義
+
+volumes:
+
+  db-data:
+
+
+# サービスが接続するネットワークの定義
+
+networks:
+
+  app-network:
+
+    driver: bridge
+
+既存のdocker-compose.ymlを自己署名証明書に対応させるには、主にNginxサービスの設定を変更します。具体的には、HTTPSポート（443）を追加し、SSL証明書とキーをコンテナにマウントする必要があります。
+
+以下に、ご提示いただいたYAMLファイルをSSL対応に書き換えた例を示します。
+
+docker-compose.ymlのSSL対応版
+
+YAML
+
+services:
+  #--------------------------------
+  # Nginx (Webサーバー)
+  #--------------------------------
+  nginx:
+    container_name: dev-nginx
+    build:
+      context: .
+      dockerfile: ./docker/nginx/Dockerfile
+    ports:
+      # HTTP (80) と HTTPS (443) の両方を公開
+      - "80:80"
+      - "443:443"
+    volumes:
+      # appディレクトリをマウントしてNginxから参照できるようにする
+      - ./app:/var/www/html
+      - ./php-lib:/var/www/php-lib
+      # Nginxの設定ファイルをマウント
+      - ./docker/nginx/default.conf:/etc/nginx/conf.d/default.conf
+      # ★ 自己署名証明書と秘密鍵をマウント
+      - ./docker/nginx/ssl:/etc/nginx/ssl:ro
+    depends_on:
+      php:
+        condition: service_started
+      frontend:
+        condition: service_started
+    networks:
+      - app-network
+
+  #--------------------------------
+  # PHP-FPM
+  #--------------------------------
+  php:
+    container_name: dev-php
+    build:
+      context: .
+      dockerfile: ./docker/php/Dockerfile
+    volumes:
+      # appディレクトリをマウントしてPHPからファイルを実行できるようにする
+      - ./app:/var/www/html
+      - ./php-lib:/var/www/php-lib
+    environment:
+      # MailHogの設定を追加
+      MAILHOG_HOST: mailhog
+      MAILHOG_PORT: 1025
+      TZ: Asia/Tokyo
+    env_file:
+      - .env
+    networks:
+      - app-network
+
+  #--------------------------------
+  # Next.js (フロントエンド)
+  #--------------------------------
+  frontend:
+    container_name: dev-frontend
+    build:
+      # ビルドのコンテキストをカレントディレクトリに設定
+      context: .
+      # 使用するDockerfileのパスを指定
+      dockerfile: ./docker/frontend/Dockerfile
+    volumes:
+      # Next.jsのソースコードをマウントしてホットリロードを有効化
+      - ./app/frontend:/app
+      # node_modulesはホストからマウントせず、コンテナ内のものを維持する
+      - /app/node_modules
+    ports:
+      # Next.jsのdevサーバーが使用する3000番ポートを公開
+      - "3000:3000"
+    environment:
+      # Docker環境でのホットリロードを安定させるための設定
+      - CHOKIDAR_USEPOLLING=true
+      - WATCHPACK_POLLING=true
+    develop:
+      watch:
+        - action: sync
+          path: .
+          target: /app
+    networks:
+      - app-network
+    # コンテナを起動し続けるためにttyを有効化
+    tty: true
+
+  #--------------------------------
+  # MySQL (データベース)
+  #--------------------------------
+  mysql:
+    container_name: dev-mysql
+    image: mysql:8.0
+    ports:
+      # ホストの3306番ポートをコンテナの3306番ポートに接続
+      - "3306:3306"
+    environment:
+      MYSQL_DATABASE: ${DB_NAME} #各自変更
+      MYSQL_USER: ${DB_USER} #各自変更
+      MYSQL_PASSWORD: ${DB_PASSWORD} #各自変更
+      MYSQL_ROOT_PASSWORD: rootpassword #各自変更
+      TZ: Asia/Tokyo
+    volumes:
+      # データを永続化するための名前付きボリューム
+      - db-data:/var/lib/mysql
+      - ./docker/mysql/my.cnf:/etc/mysql/conf.d/my.cnf
+      - ./docker/mysql/sql:/docker-entrypoint-initdb.d #新規追加
+    networks:
+      - app-network
+
+  #--------------------------------
+  # phpMyAdmin (DB管理ツール)
+  #--------------------------------
+  db-admin:
+    container_name: dev-db-admin
+    image: phpmyadmin/phpmyadmin
+    ports:
+      # ホストの8080番ポートをコンテナの80番ポートに接続
+      - "8080:80"
+    environment:
+      # 接続先のMySQLホスト名を指定
+      PMA_HOST: mysql
+      PMA_PORT: 3306
+    depends_on:
+      mysql:
+        condition: service_started
+    networks:
+      - app-network
+
+  #--------------------------------
+  # MailHog
+  #--------------------------------
+  mailhog:
+    container_name: dev-mailhog
+    image: mailhog/mailhog
+    logging:
+      driver: "none"
+    ports:
+      # メール受信用のSMTPポート
+      - "1025:1025"
+      # Web UI用のHTTPポート
+      - "8025:8025"
+    networks:
+      - app-network
+
+# 名前付きボリュームの定義
+volumes:
+  db-data:
+
+# サービスが接続するネットワークの定義
+networks:
+  app-network:
+    driver: bridge
+
+変更点の解説
+
+    Nginxのports設定:
+
+        portsセクションに**- "443:443"**を追加しました。これにより、ホストマシンのポート443とNginxコンテナのポート443が接続され、外部からのHTTPSリクエストを受け付けられるようになります。
+
+    Nginxのvolumes設定:
+
+        **- ./docker/nginx/ssl:/etc/nginx/ssl:ro**を追加しました。
+
+        この設定は、ホストマシン上の**./docker/nginx/sslディレクトリを、Nginxコンテナ内の/etc/nginx/ssl**ディレクトリに読み取り専用（ro）でマウントします。
+
+        このディレクトリに、事前に作成した**nextjs.crt（証明書）とnextjs.key**（秘密鍵）を配置することで、NginxがSSL証明書を認識できるようになります。
+
+この変更を適用する前に、プロジェクトのルートディレクトリに**docker/nginx/ssl**ディレクトリを作成し、その中に自己署名証明書ファイル（nextjs.crtとnextjs.key）を配置してください。
+
+これにより、Docker ComposeでNginxサービスを起動する際に、HTTPS通信に必要な証明書がコンテナに供給され、SSL化が実現します。
