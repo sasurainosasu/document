@@ -1,0 +1,44 @@
+alma linux 10系　初期設定
+
+//ユーザーの追加
+useradd example
+passwd example
+
+//hosts.allowの設定
+vi /etc/hosts.allow
+
+//sshd
+sshd : xxx.xxx.xxx.xxx : allow
+sshd : xxx.xxx.xxx.xxx : allow
+
+//vsftpd
+vsftpd: xxx.xxx.xxx.xxx : allow
+vsftpd: xxx.xxx.xxx.xxx: allow
+
+//hosts.denyの設定
+vi /etc/hosts.deny
+
+//ALL
+ALL : ALL
+
+//sshd_configの設定
+vi /etc/ssh/sshd_config
+PermitRootLogin no
+systemctl restart sshd
+
+//httpdのインストール
+yum install httpd
+systemctl start httpd
+firewall-cmd --permanent --add-service=http
+firewall-cmd --permanent --add-service=https
+firewall-cmd --reload
+systemctl enable httpd.service
+
+//vsftpdのインストール
+yum install vsftpd
+firewall-cmd --add-service=ftp
+firewall-cmd --add-service=ftp --permanent
+
+//vsftpdを利用可能にする
+systemctl enable vsftpd.service
+

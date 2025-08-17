@@ -36,8 +36,13 @@ docker run --rm -v ./app/frontend:/app -w /app node:20-alpine npm install react-
 #ドラッグアンドドロップ用のライブラリ
 docker run --rm -v ./app/frontend:/app -w /app node:20-alpine npm install @hello-pangea/dnd
 
-//js-cookieの導入
+#カレンダー機能の追加
+docker run --rm -v ./app/frontend:/app -w /app node:20-alpine npm install react-datepicker moment
 
+#datapickerを日本語に変更
+docker run --rm -v ./app/frontend:/app -w /app node:20-alpine npm install date-fns
+
+//js-cookieの導入
 docker run --rm -v ./app/frontend:/app -w /app node:20-alpine npm i --save-dev @types/js-cookie
 
 //next.jsのメモリを増やす
