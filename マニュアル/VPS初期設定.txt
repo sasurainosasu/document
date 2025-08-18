@@ -6,8 +6,8 @@ passwd example
 
 //sshの接続元を特定のIPのみ許可する
 1.IPアドレスの追加
-firewall-cmd --permanent --zone=public --add-rich-rule="rule family="ipv4" source address="126.208.149.168" port protocol="tcp" port="22" accept"
-firewall-cmd --permanent --zone=public --add-rich-rule="rule family="ipv4" source address="60.79.183.46" port protocol="tcp" port="22" accept"
+firewall-cmd --permanent --zone=public --add-rich-rule="rule family="ipv4" source address="xxx.xxx.xxx.xxx" port protocol="tcp" port="22" accept"
+firewall-cmd --permanent --zone=public --add-rich-rule="rule family="ipv4" source address="xxx.xxx.xxx.xxx" port protocol="tcp" port="22" accept"
 
 2.不特定のIPアドレスからアクセスできないようにする
 firewall-cmd --remove-service=ssh --zone=public --permanent
