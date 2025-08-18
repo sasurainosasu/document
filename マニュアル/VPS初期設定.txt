@@ -4,22 +4,24 @@ alma linux 10系　初期設定
 useradd example
 passwd example
 
-//hosts.allowの設定
-vi /etc/hosts.allow
+//sshの接続元を特定のIPのみ許可する
+1.IPアドレスの追加
+firewall-cmd --permanent --zone=public --add-rich-rule="rule family="ipv4" source address="126.208.149.168" port protocol="tcp" port="22" accept"
+firewall-cmd --permanent --zone=public --add-rich-rule="rule family="ipv4" source address="60.79.183.46" port protocol="tcp" port="22" accept"
 
-//sshd
-sshd : xxx.xxx.xxx.xxx : allow
-sshd : xxx.xxx.xxx.xxx : allow
+2.不特定のIPアドレスからアクセスできないようにする
+firewall-cmd --remove-service=ssh --zone=public --permanent
 
-//vsftpd
-vsftpd: xxx.xxx.xxx.xxx : allow
-vsftpd: xxx.xxx.xxx.xxx: allow
+3.再起動する
+firewall-cmd --reload
 
-//hosts.denyの設定
-vi /etc/hosts.deny
+※設定が不要になったら
+firewall-cmd --zone=public --remove-rich-rule="rule family="ipv4" source address="114.XXX.XXX.72" port protocol="tcp" port="22" accept"
 
-//ALL
-ALL : ALL
+▽設定ファイルはここに置かれている
+/etc/firewalld/zones/public.xml
+
+（参考URL：https://blog.netandfield.com/shar/2021/09/almalinux-ssh-ip.html）
 
 //sshd_configの設定
 vi /etc/ssh/sshd_config
